@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function isAdmin() {
+      return request.auth != null && userDoc().role == 'admin';
+    }
+    // Only approved CLASS teachers may approve/reject students.
+    // Docs without a `type` field (created before this feature) are
+    // treated as class teachers.
+    function isApprovedClassTeacher() {
+      return request.auth != null &&
+        userDoc().role == 'teacher' &&
+        userDoc().status == 'approved' &&
+        (!userDoc().keys().hasAny(['type']) ||
+         userDoc().type == 'classTeacher');
+    }
+
+    match /users/{uid} {
+      // Any signed-in user can read profiles (needed for dashboards/queries).
+      allow read: if request.auth != null;
+
+      // Users may only create their own profile, always as pending.
+      allow create: if request.auth != null &&
+        request.auth.uid == uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.role in ['student', 'teacher'];
+
+      // Admin can update anyone; approved class teachers may only change
+      // the `status` field (student approval workflow). Self-update is NOT
+      // allowed so users cannot approve themselves.
+      allow update: if request.auth != null && (
+        isAdmin() ||
+        (isApprovedClassTeacher() &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['status']))
+      );
+
+      allow delete: if false;
+    }
+  }
+}
